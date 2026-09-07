@@ -603,6 +603,45 @@ pub async fn submit_handover(
     Ok((StatusCode::CREATED, Json(row)))
 }
 
+/// GET /api/v1/shifts/{shift_id}/handover
+#[utoipa::path(
+    get,
+    path = "/api/v1/shifts/{shift_id}/handover",
+    params(
+        ("shift_id" = Uuid, Path, description = "Shift unique identifier"),
+    ),
+    responses(
+        (status = 200, description = "Handover report", body = HandoverResponse),
+        (status = 401, description = "Missing or invalid token", body = ErrorResponse),
+        (status = 403, description = "Not authorized to view this handover", body = ErrorResponse),
+        (status = 404, description = "Shift or handover not found", body = ErrorResponse)
+    ),
+    tag = "shifts",
+    summary = "Get the handover report for a shift",
+    description = "Returns the handover the assigned worker submitted at clock-out. Readable by the owning hospital, a super admin, or the assigned worker."
+)]
+pub async fn get_handover(
+    State(state): State<AppState>,
+    Path(shift_id): Path<Uuid>,
+    headers: HeaderMap,
+) -> AppResult<Json<HandoverResponse>> {
+    let claims = extract_claims(&headers)?;
+    let viewer_user_id = Uuid::parse_str(&claims.sub)
+        .map_err(|_| AppError::Unauthorized("Invalid user ID in token".to_string()))?;
+    let viewer_hospital_id = claims
+        .hospital_id
+        .as_deref()
+        .and_then(|s| Uuid::parse_str(s).ok());
+
+    let row = state
+        .shift_service
+        .get_handover_for_viewer(shift_id, viewer_user_id, claims.role, viewer_hospital_id)
+        .await
+        .map_err(map_shift_error)?;
+
+    Ok(Json(row))
+}
+
 /// POST /api/v1/shifts/{shift_id}/clockout
 #[utoipa::path(
     post,
@@ -1432,6 +1471,12 @@ fn map_shift_error(e: ShiftServiceError) -> AppError {
         }
         ShiftServiceError::OfferAlreadyResponded => {
             AppError::Conflict("This offer has already been responded to".to_string())
+        }
+        ShiftServiceError::HandoverNotFound => {
+            AppError::NotFound("No handover has been submitted for this shift".to_string())
+        }
+        ShiftServiceError::Forbidden => {
+            AppError::Forbidden("Not authorized to view this resource".to_string())
         }
     }
 }
