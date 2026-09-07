@@ -127,6 +127,12 @@ pub enum ShiftServiceError {
 
     #[error("This offer has already been responded to")]
     OfferAlreadyResponded,
+
+    #[error("No handover has been submitted for this shift")]
+    HandoverNotFound,
+
+    #[error("Not authorized to view this resource")]
+    Forbidden,
 }
 
 /// Which write a clock-in takes. The manual endpoint has always overwritten on
@@ -417,6 +423,46 @@ impl ShiftService {
             .get_by_id(shift_id)
             .await?
             .ok_or(ShiftServiceError::NotFound(shift_id))
+    }
+
+    /// Fetch the handover submitted for a shift, authorizing the viewer: the
+    /// owning hospital (or any super admin) and the assigned worker may read it.
+    pub async fn get_handover_for_viewer(
+        &self,
+        shift_id: Uuid,
+        viewer_user_id: Uuid,
+        viewer_role: crate::models::user::UserRole,
+        viewer_hospital_id: Option<Uuid>,
+    ) -> Result<crate::models::shift::HandoverResponse, ShiftServiceError> {
+        use crate::models::user::UserRole;
+
+        let shift = self
+            .shift_repo
+            .get_by_id(shift_id)
+            .await?
+            .ok_or(ShiftServiceError::NotFound(shift_id))?;
+
+        // Only the owning hospital, a super admin, or the assigned worker.
+        let authorized = match viewer_role {
+            UserRole::SuperAdmin => true,
+            UserRole::HospitalAdmin => viewer_hospital_id == Some(shift.hospital_id),
+            UserRole::HealthWorker => {
+                let clinician_id = self
+                    .shift_repo
+                    .find_clinician_id_for_user(viewer_user_id)
+                    .await?;
+                clinician_id.is_some() && clinician_id == shift.assigned_clinician_id
+            }
+            _ => false,
+        };
+        if !authorized {
+            return Err(ShiftServiceError::Forbidden);
+        }
+
+        self.shift_repo
+            .get_handover(shift_id)
+            .await?
+            .ok_or(ShiftServiceError::HandoverNotFound)
     }
 
     /// Enriched shift detail for the "View Shift Details" screen (SCRUM-25 /

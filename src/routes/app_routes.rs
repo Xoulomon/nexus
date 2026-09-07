@@ -126,6 +126,7 @@ pub struct AppState {
         crate::handlers::shifts::decline_shift,
         crate::handlers::shifts::clock_in,
         crate::handlers::shifts::submit_handover,
+        crate::handlers::shifts::get_handover,
         crate::handlers::shifts::clock_out,
         crate::handlers::shifts::request_handover_revision,
         crate::handlers::shifts::approve_handover,
@@ -849,7 +850,10 @@ pub fn create_router(
         .route(
             "/api/v1/shifts/{shift_id}/handover",
             post(shifts::submit_handover)
-                .route_layer(from_fn(require_role(&[UserRole::HealthWorker]))),
+                .route_layer(from_fn(require_role(&[UserRole::HealthWorker])))
+                // GET is open at the route level; the handler authorizes the
+                // owning hospital / super admin / assigned worker.
+                .get(shifts::get_handover),
         )
         .route(
             "/api/v1/shifts/{shift_id}/clockout",
